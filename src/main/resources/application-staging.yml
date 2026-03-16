@@ -1,0 +1,46 @@
+# Staging Profile
+# Environment variable placeholders, both orgs enabled, staging topic prefixes
+
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/bridge_staging}
+    username: ${DB_USERNAME:bridge_user}
+    password: ${DB_PASSWORD}
+
+kafka:
+  bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+  security:
+    protocol: ${KAFKA_SECURITY_PROTOCOL:SASL_SSL}
+    sasl-mechanism: ${KAFKA_SASL_MECHANISM:PLAIN}
+    sasl-jaas-config: ${KAFKA_SASL_JAAS_CONFIG:}
+
+salesforce:
+  orgs:
+    srm:
+      enabled: true
+    acad:
+      enabled: true
+
+bridge:
+  topic-routing:
+    srm:
+      /event/Enrollment_Event__e: staging.salesforce.srm.enrollment
+      /event/Student_Event__e: staging.salesforce.srm.student
+    acad:
+      /event/Course_Event__e: staging.salesforce.acad.course
+
+resilience:
+  circuit-breaker:
+    failure-threshold: 5
+    cool-down-period-seconds: 60
+    half-open-max-attempts: 3
+
+logging:
+  level:
+    root: INFO
+    com.example.bridge: INFO
+
+management:
+  metrics:
+    tags:
+      environment: staging

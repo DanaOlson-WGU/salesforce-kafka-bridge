@@ -1,0 +1,131 @@
+spring:
+  application:
+    name: salesforce-kafka-bridge
+  
+  # Database Configuration
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/bridge_dev}
+    username: ${DB_USERNAME:bridge_user}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  
+  # JPA Configuration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+    show-sql: false
+  
+  # Flyway Configuration
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+# Kafka Configuration
+kafka:
+  bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+  producer:
+    acks: all
+    enable-idempotence: true
+    max-in-flight-requests-per-connection: 5
+    retries: 2147483647
+    compression-type: snappy
+    key-serializer: org.apache.kafka.common.serialization.StringSerializer
+    value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+  
+  security:
+    protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+    sasl-mechanism: ${KAFKA_SASL_MECHANISM:PLAIN}
+    sasl-jaas-config: ${KAFKA_SASL_JAAS_CONFIG:}
+
+# Salesforce Configuration
+salesforce:
+  orgs:
+    srm:
+      pubsub-url: ${SF_SRM_PUBSUB_URL:api.pubsub.salesforce.com:7443}
+      oauth-url: ${SF_SRM_OAUTH_URL:https://login.salesforce.com/services/oauth2/token}
+      client-id: ${SF_SRM_CLIENT_ID}
+      client-secret: ${SF_SRM_CLIENT_SECRET}
+      username: ${SF_SRM_USERNAME}
+      password: ${SF_SRM_PASSWORD}
+      enabled: ${SF_SRM_ENABLED:true}
+      topics:
+        - /event/Enrollment_Event__e
+        - /event/Student_Event__e
+    acad:
+      pubsub-url: ${SF_ACAD_PUBSUB_URL:api.pubsub.salesforce.com:7443}
+      oauth-url: ${SF_ACAD_OAUTH_URL:https://login.salesforce.com/services/oauth2/token}
+      client-id: ${SF_ACAD_CLIENT_ID}
+      client-secret: ${SF_ACAD_CLIENT_SECRET}
+      username: ${SF_ACAD_USERNAME}
+      password: ${SF_ACAD_PASSWORD}
+      enabled: ${SF_ACAD_ENABLED:true}
+      topics:
+        - /event/Course_Event__e
+  
+  retry:
+    max-attempts: 10
+    initial-interval-ms: 1000
+    max-interval-ms: 60000
+    multiplier: 2.0
+
+# Bridge Configuration
+bridge:
+  topic-routing:
+    srm:
+      /event/Enrollment_Event__e: salesforce.srm.enrollment
+      /event/Student_Event__e: salesforce.srm.student
+    acad:
+      /event/Course_Event__e: salesforce.acad.course
+
+# Resilience Configuration
+resilience:
+  circuit-breaker:
+    failure-threshold: 5
+    cool-down-period-seconds: 60
+    half-open-max-attempts: 3
+
+# Management Endpoints Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+      base-path: /actuator
+  
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: salesforce-kafka-bridge
+      environment: ${ENVIRONMENT:dev}
+
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.example.bridge: DEBUG
+    org.apache.kafka: WARN
+    io.grpc: WARN
+    org.springframework.kafka: WARN
+    org.hibernate: WARN
+  
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"

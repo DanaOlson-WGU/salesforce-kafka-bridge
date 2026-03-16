@@ -1,0 +1,45 @@
+# Development Profile
+# Localhost infrastructure, SRM org only, dev topic prefixes, relaxed thresholds
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/bridge_dev
+    username: bridge_user
+    password: bridge_pass
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+
+kafka:
+  bootstrap-servers: localhost:9092
+  security:
+    protocol: PLAINTEXT
+
+salesforce:
+  orgs:
+    srm:
+      enabled: true
+    acad:
+      enabled: false
+
+bridge:
+  topic-routing:
+    srm:
+      /event/Enrollment_Event__e: dev.salesforce.srm.enrollment
+      /event/Student_Event__e: dev.salesforce.srm.student
+
+resilience:
+  circuit-breaker:
+    failure-threshold: 3
+    cool-down-period-seconds: 30
+    half-open-max-attempts: 2
+
+logging:
+  level:
+    root: INFO
+    com.example.bridge: DEBUG
+
+management:
+  metrics:
+    tags:
+      environment: dev

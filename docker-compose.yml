@@ -1,0 +1,93 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bridge_dev
+      POSTGRES_USER: bridge_user
+      POSTGRES_PASSWORD: bridge_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bridge_user -d bridge_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  bridge:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      # Database
+      DB_URL: jdbc:postgresql://postgres:5432/bridge_dev
+      DB_USERNAME: bridge_user
+      DB_PASSWORD: bridge_pass
+      # Kafka
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+      # Salesforce SRM Org
+      SF_SRM_CLIENT_ID: ${SF_SRM_CLIENT_ID:-dev-srm-client-id}
+      SF_SRM_CLIENT_SECRET: ${SF_SRM_CLIENT_SECRET:-dev-srm-client-secret}
+      SF_SRM_USERNAME: ${SF_SRM_USERNAME:-dev-srm-user}
+      SF_SRM_PASSWORD: ${SF_SRM_PASSWORD:-dev-srm-pass}
+      SF_SRM_ENABLED: ${SF_SRM_ENABLED:-true}
+      # Salesforce ACAD Org
+      SF_ACAD_CLIENT_ID: ${SF_ACAD_CLIENT_ID:-dev-acad-client-id}
+      SF_ACAD_CLIENT_SECRET: ${SF_ACAD_CLIENT_SECRET:-dev-acad-client-secret}
+      SF_ACAD_USERNAME: ${SF_ACAD_USERNAME:-dev-acad-user}
+      SF_ACAD_PASSWORD: ${SF_ACAD_PASSWORD:-dev-acad-pass}
+      SF_ACAD_ENABLED: ${SF_ACAD_ENABLED:-true}
+      # Environment
+      ENVIRONMENT: dev
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  postgres_data:

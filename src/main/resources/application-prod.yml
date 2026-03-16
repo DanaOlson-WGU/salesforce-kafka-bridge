@@ -1,0 +1,54 @@
+# Production Profile
+# All values via env vars, both orgs enabled, production topics, hardened settings
+
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+
+kafka:
+  bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+  security:
+    protocol: ${KAFKA_SECURITY_PROTOCOL:SASL_SSL}
+    sasl-mechanism: ${KAFKA_SASL_MECHANISM:PLAIN}
+    sasl-jaas-config: ${KAFKA_SASL_JAAS_CONFIG}
+
+salesforce:
+  orgs:
+    srm:
+      enabled: true
+    acad:
+      enabled: true
+  retry:
+    max-attempts: 15
+    initial-interval-ms: 2000
+    max-interval-ms: 60000
+    multiplier: 2.0
+
+bridge:
+  topic-routing:
+    srm:
+      /event/Enrollment_Event__e: salesforce.srm.enrollment
+      /event/Student_Event__e: salesforce.srm.student
+    acad:
+      /event/Course_Event__e: salesforce.acad.course
+
+resilience:
+  circuit-breaker:
+    failure-threshold: 10
+    cool-down-period-seconds: 120
+    half-open-max-attempts: 5
+
+logging:
+  level:
+    root: WARN
+    com.example.bridge: INFO
+
+management:
+  metrics:
+    tags:
+      environment: prod
