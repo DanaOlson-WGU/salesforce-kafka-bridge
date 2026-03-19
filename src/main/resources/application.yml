@@ -129,3 +129,10 @@ logging:
   
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# Schema Registry Configuration
+schema-registry:
+  url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
+  auth-source: ${SCHEMA_REGISTRY_AUTH_SOURCE:}
+  user-info: ${SCHEMA_REGISTRY_USER_INFO:}
+  compatibility-level: ${SCHEMA_REGISTRY_COMPATIBILITY:BACKWARD}

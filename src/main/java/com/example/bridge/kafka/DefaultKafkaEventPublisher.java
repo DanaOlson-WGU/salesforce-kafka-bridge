@@ -1,5 +1,6 @@
 package com.example.bridge.kafka;
 
+import com.example.bridge.avro.AvroRecordConverter;
 import com.example.bridge.model.ConnectionStatus;
 import com.example.bridge.model.EventBatch;
 import com.example.bridge.model.PlatformEvent;
@@ -7,8 +8,7 @@ import com.example.bridge.model.PublishResult;
 import com.example.bridge.replay.CheckpointException;
 import com.example.bridge.replay.ReplayStore;
 import com.example.bridge.routing.TopicRouter;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeaders;
@@ -19,7 +19,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -41,24 +40,24 @@ public class DefaultKafkaEventPublisher implements KafkaEventPublisher {
     private static final String HEADER_RECEIVED_AT = "received-at";
     private static final String HEADER_BRIDGE_VERSION = "bridge-version";
 
-    private final KafkaTemplate<String, byte[]> kafkaTemplate;
+    private final KafkaTemplate<String, GenericRecord> kafkaTemplate;
     private final TopicRouter topicRouter;
     private final ReplayStore replayStore;
-    private final ObjectMapper objectMapper;
+    private final AvroRecordConverter avroRecordConverter;
     private final String bridgeVersion;
     private final long sendTimeoutSeconds;
 
     public DefaultKafkaEventPublisher(
-            KafkaTemplate<String, byte[]> kafkaTemplate,
+            KafkaTemplate<String, GenericRecord> kafkaTemplate,
             TopicRouter topicRouter,
             ReplayStore replayStore,
-            ObjectMapper objectMapper,
+            AvroRecordConverter avroRecordConverter,
             @Value("${spring.application.version:0.0.1-SNAPSHOT}") String bridgeVersion,
             @Value("${bridge.kafka.send-timeout-seconds:30}") long sendTimeoutSeconds) {
         this.kafkaTemplate = kafkaTemplate;
         this.topicRouter = topicRouter;
         this.replayStore = replayStore;
-        this.objectMapper = objectMapper;
+        this.avroRecordConverter = avroRecordConverter;
         this.bridgeVersion = bridgeVersion;
         this.sendTimeoutSeconds = sendTimeoutSeconds;
     }
@@ -111,13 +110,13 @@ public class DefaultKafkaEventPublisher implements KafkaEventPublisher {
     }
 
     private void publishEvent(EventBatch batch, PlatformEvent event, String kafkaTopic)
-            throws JsonProcessingException, ExecutionException, InterruptedException, TimeoutException {
+            throws ExecutionException, InterruptedException, TimeoutException {
 
-        byte[] payload = objectMapper.writeValueAsBytes(event.getPayload());
+        GenericRecord avroRecord = avroRecordConverter.toGenericRecord(batch, event);
         String key = buildCompositeKey(batch.getOrg(), batch.getSalesforceTopic(), event);
         Headers headers = buildHeaders(batch, event);
 
-        ProducerRecord<String, byte[]> record = new ProducerRecord<>(kafkaTopic, null, key, payload, headers);
+        ProducerRecord<String, GenericRecord> record = new ProducerRecord<>(kafkaTopic, null, key, avroRecord, headers);
 
         kafkaTemplate.send(record)
                 .get(sendTimeoutSeconds, TimeUnit.SECONDS);

@@ -52,3 +52,8 @@ management:
   metrics:
     tags:
       environment: prod
+
+schema-registry:
+  url: ${SCHEMA_REGISTRY_URL}
+  auth-source: ${SCHEMA_REGISTRY_AUTH_SOURCE:USER_INFO}
+  user-info: ${SCHEMA_REGISTRY_USER_INFO}

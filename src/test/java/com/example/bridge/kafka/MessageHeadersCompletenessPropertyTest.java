@@ -1,5 +1,6 @@
 package com.example.bridge.kafka;
 
+import com.example.bridge.avro.AvroRecordConverter;
 import com.example.bridge.model.EventBatch;
 import com.example.bridge.model.PlatformEvent;
 import com.example.bridge.model.PublishResult;
@@ -11,12 +12,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import net.jqwik.api.*;
 import net.jqwik.api.constraints.IntRange;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -45,6 +49,17 @@ class MessageHeadersCompletenessPropertyTest {
     private static final String HEADER_BRIDGE_VERSION = "bridge-version";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AvroRecordConverter avroRecordConverter;
+
+    MessageHeadersCompletenessPropertyTest() {
+        try {
+            Schema schema = new Schema.Parser().parse(
+                    getClass().getResourceAsStream("/avro/SalesforcePlatformEvent.avsc"));
+            this.avroRecordConverter = new AvroRecordConverter(schema, objectMapper);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load Avro schema for tests", e);
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Property: All required headers present for any published event
@@ -60,8 +75,8 @@ class MessageHeadersCompletenessPropertyTest {
             @ForAll("timestamps") Instant receivedAt) throws Exception {
 
         // Use a capturing list instead of mocking KafkaTemplate
-        List<ProducerRecord<String, byte[]>> capturedRecords = new ArrayList<>();
-        KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+        List<ProducerRecord<String, GenericRecord>> capturedRecords = new ArrayList<>();
+        KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
         TopicRouter topicRouter = mock(TopicRouter.class);
         ReplayStore replayStore = mock(ReplayStore.class);
 
@@ -69,7 +84,7 @@ class MessageHeadersCompletenessPropertyTest {
         when(topicRouter.getKafkaTopic(org, salesforceTopic)).thenReturn(Optional.of(kafkaTopic));
 
         DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
         // Create event batch
         ReplayId replayId = new ReplayId(replayIdBytes);
@@ -106,8 +121,8 @@ class MessageHeadersCompletenessPropertyTest {
             @ForAll("replayIds") byte[] replayIdBytes,
             @ForAll("timestamps") Instant receivedAt) throws Exception {
 
-        List<ProducerRecord<String, byte[]>> capturedRecords = new ArrayList<>();
-        KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+        List<ProducerRecord<String, GenericRecord>> capturedRecords = new ArrayList<>();
+        KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
         TopicRouter topicRouter = mock(TopicRouter.class);
         ReplayStore replayStore = mock(ReplayStore.class);
 
@@ -115,7 +130,7 @@ class MessageHeadersCompletenessPropertyTest {
         when(topicRouter.getKafkaTopic(org, salesforceTopic)).thenReturn(Optional.of(kafkaTopic));
 
         DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
         // Create event batch
         ReplayId replayId = new ReplayId(replayIdBytes);
@@ -151,8 +166,8 @@ class MessageHeadersCompletenessPropertyTest {
             @ForAll @IntRange(min = 1, max = 10) int eventCount,
             @ForAll("timestamps") Instant receivedAt) throws Exception {
 
-        List<ProducerRecord<String, byte[]>> capturedRecords = new ArrayList<>();
-        KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+        List<ProducerRecord<String, GenericRecord>> capturedRecords = new ArrayList<>();
+        KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
         TopicRouter topicRouter = mock(TopicRouter.class);
         ReplayStore replayStore = mock(ReplayStore.class);
 
@@ -160,7 +175,7 @@ class MessageHeadersCompletenessPropertyTest {
         when(topicRouter.getKafkaTopic(org, salesforceTopic)).thenReturn(Optional.of(kafkaTopic));
 
         DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
         // Create batch with multiple events
         List<PlatformEvent> events = new ArrayList<>();
@@ -218,8 +233,8 @@ class MessageHeadersCompletenessPropertyTest {
 
         Assume.that(!org1.equals(org2));
 
-        List<ProducerRecord<String, byte[]>> capturedRecords = new ArrayList<>();
-        KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+        List<ProducerRecord<String, GenericRecord>> capturedRecords = new ArrayList<>();
+        KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
         TopicRouter topicRouter = mock(TopicRouter.class);
         ReplayStore replayStore = mock(ReplayStore.class);
 
@@ -229,7 +244,7 @@ class MessageHeadersCompletenessPropertyTest {
                 .thenReturn(Optional.of("salesforce." + org2 + ".events"));
 
         DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
         ReplayId replayId = new ReplayId(replayIdBytes);
         JsonNode payload = createPayload(eventType);
@@ -304,11 +319,11 @@ class MessageHeadersCompletenessPropertyTest {
      * on newer JVMs.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private KafkaTemplate<String, byte[]> createCapturingKafkaTemplate(
-            List<ProducerRecord<String, byte[]>> capturedRecords) {
-        return new KafkaTemplate<String, byte[]>(mock(org.springframework.kafka.core.ProducerFactory.class)) {
+    private KafkaTemplate<String, GenericRecord> createCapturingKafkaTemplate(
+            List<ProducerRecord<String, GenericRecord>> capturedRecords) {
+        return new KafkaTemplate<String, GenericRecord>(mock(org.springframework.kafka.core.ProducerFactory.class)) {
             @Override
-            public CompletableFuture<SendResult<String, byte[]>> send(ProducerRecord record) {
+            public CompletableFuture<SendResult<String, GenericRecord>> send(ProducerRecord record) {
                 capturedRecords.add(record);
                 return CompletableFuture.completedFuture(null);
             }

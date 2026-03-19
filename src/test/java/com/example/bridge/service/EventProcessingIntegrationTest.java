@@ -1,5 +1,6 @@
 package com.example.bridge.service;
 
+import com.example.bridge.avro.AvroRecordConverter;
 import com.example.bridge.config.BridgeProperties;
 import com.example.bridge.config.OrgConfig;
 import com.example.bridge.config.RetryConfig;
@@ -27,6 +28,8 @@ import com.example.bridge.routing.TopicRouter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -56,6 +59,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import jakarta.persistence.EntityManagerFactory;
 import javax.sql.DataSource;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -88,7 +92,8 @@ class EventProcessingIntegrationTest {
     private static AnnotationConfigApplicationContext springContext;
     private static ReplayStore replayStore;
     private static JdbcTemplate jdbcTemplate;
-    private static KafkaTemplate<String, byte[]> kafkaTemplate;
+    private static KafkaTemplate<String, GenericRecord> kafkaTemplate;
+    private static AvroRecordConverter avroRecordConverter;
     private static boolean infrastructureAvailable = false;
 
     @BeforeAll
@@ -126,7 +131,28 @@ class EventProcessingIntegrationTest {
             producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
             producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class);
             producerProps.put(ProducerConfig.ACKS_CONFIG, "all");
-            kafkaTemplate = new KafkaTemplate<>(new DefaultKafkaProducerFactory<>(producerProps));
+            DefaultKafkaProducerFactory<String, GenericRecord> producerFactory =
+                    new DefaultKafkaProducerFactory<>(producerProps);
+            producerFactory.setValueSerializer(new org.apache.kafka.common.serialization.Serializer<>() {
+                @Override
+                public byte[] serialize(String topic, GenericRecord data) {
+                    if (data == null) return null;
+                    try {
+                        var baos = new java.io.ByteArrayOutputStream();
+                        var encoder = org.apache.avro.io.EncoderFactory.get().binaryEncoder(baos, null);
+                        new org.apache.avro.generic.GenericDatumWriter<GenericRecord>(data.getSchema()).write(data, encoder);
+                        encoder.flush();
+                        return baos.toByteArray();
+                    } catch (IOException e) {
+                        throw new RuntimeException("Failed to serialize GenericRecord", e);
+                    }
+                }
+            });
+            kafkaTemplate = new KafkaTemplate<>(producerFactory);
+
+            Schema schema = new Schema.Parser().parse(
+                    EventProcessingIntegrationTest.class.getResourceAsStream("/avro/SalesforcePlatformEvent.avsc"));
+            avroRecordConverter = new AvroRecordConverter(schema, objectMapper);
 
             infrastructureAvailable = true;
         } catch (Exception e) {
@@ -320,11 +346,11 @@ class EventProcessingIntegrationTest {
     // -----------------------------------------------------------------------
 
     private KafkaEventPublisher createKafkaPublisher(TopicRouter topicRouter) {
-        return new DefaultKafkaEventPublisher(kafkaTemplate, topicRouter, replayStore, objectMapper, "test", 30);
+        return new DefaultKafkaEventPublisher(kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "test", 30);
     }
 
     private KafkaEventPublisher createKafkaPublisher(TopicRouter topicRouter, ReplayStore store) {
-        return new DefaultKafkaEventPublisher(kafkaTemplate, topicRouter, store, objectMapper, "test", 30);
+        return new DefaultKafkaEventPublisher(kafkaTemplate, topicRouter, store, avroRecordConverter, "test", 30);
     }
 
     private KafkaConsumer<String, byte[]> createConsumer() {

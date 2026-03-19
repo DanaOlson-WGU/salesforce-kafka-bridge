@@ -1,5 +1,6 @@
 package com.example.bridge.kafka;
 
+import com.example.bridge.avro.AvroRecordConverter;
 import com.example.bridge.model.ConnectionStatus;
 import com.example.bridge.model.EventBatch;
 import com.example.bridge.model.PlatformEvent;
@@ -11,6 +12,9 @@ import com.example.bridge.routing.TopicRouter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
@@ -22,6 +26,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.support.SendResult;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -58,13 +63,21 @@ class KafkaEventPublisherTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private TopicRouter topicRouter;
     private ReplayStore replayStore;
-    private List<ProducerRecord<String, byte[]>> capturedRecords;
+    private AvroRecordConverter avroRecordConverter;
+    private List<ProducerRecord<String, GenericRecord>> capturedRecords;
 
     @BeforeEach
     void setUp() {
         topicRouter = mock(TopicRouter.class);
         replayStore = mock(ReplayStore.class);
         capturedRecords = new ArrayList<>();
+        try {
+            Schema schema = new Schema.Parser().parse(
+                    getClass().getResourceAsStream("/avro/SalesforcePlatformEvent.avsc"));
+            avroRecordConverter = new AvroRecordConverter(schema, objectMapper);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load Avro schema for tests", e);
+        }
     }
 
     // =========================================================================
@@ -78,12 +91,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should return success result with correct published count for single event")
         void successfulSingleEventPublish() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Enrollment_Event__e"))
                     .thenReturn(Optional.of("salesforce.srm.enrollment"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createSingleEventBatch("srm", "/event/Enrollment_Event__e", "Enrollment_Event__e");
 
@@ -99,12 +112,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should return success result with correct count for multi-event batch")
         void successfulMultiEventPublish() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("acad", "/event/Course_Event__e"))
                     .thenReturn(Optional.of("salesforce.acad.course"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createMultiEventBatch("acad", "/event/Course_Event__e", 5);
 
@@ -119,10 +132,10 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should return success with zero count for empty batch and still checkpoint")
         void successfulEmptyBatchPublish() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             ReplayId replayId = new ReplayId("empty-batch-replay".getBytes(StandardCharsets.UTF_8));
             EventBatch batch = new EventBatch("srm", "/event/Test__e", List.of(), replayId, Instant.now());
@@ -138,12 +151,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should return success with zero count for unmapped topic without checkpoint")
         void unmappedTopicReturnsSuccessWithoutCheckpoint() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Unknown__e"))
                     .thenReturn(Optional.empty());
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createSingleEventBatch("srm", "/event/Unknown__e", "Unknown__e");
 
@@ -167,13 +180,13 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should return failure result without checkpoint when Kafka send fails")
         void kafkaFailureReturnsFailureWithoutCheckpoint() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createFailingKafkaTemplate(
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createFailingKafkaTemplate(
                     new RuntimeException("Kafka broker unavailable"));
             when(topicRouter.getKafkaTopic("srm", "/event/Enrollment_Event__e"))
                     .thenReturn(Optional.of("salesforce.srm.enrollment"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createSingleEventBatch("srm", "/event/Enrollment_Event__e", "Enrollment_Event__e");
 
@@ -187,13 +200,13 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should return failure result when Kafka times out")
         void kafkaTimeoutReturnsFailure() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createFailingKafkaTemplate(
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createFailingKafkaTemplate(
                     new org.apache.kafka.common.errors.TimeoutException("Request timed out"));
             when(topicRouter.getKafkaTopic("acad", "/event/Course_Event__e"))
                     .thenReturn(Optional.of("salesforce.acad.course"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createSingleEventBatch("acad", "/event/Course_Event__e", "Course_Event__e");
 
@@ -208,13 +221,13 @@ class KafkaEventPublisherTest {
         @DisplayName("should not checkpoint when any event in batch fails")
         void partialBatchFailureNoCheckpoint() throws CheckpointException {
             List<Integer> sendAttempts = new ArrayList<>();
-            KafkaTemplate<String, byte[]> kafkaTemplate = createPartiallyFailingKafkaTemplate(
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createPartiallyFailingKafkaTemplate(
                     2, sendAttempts, new RuntimeException("Third event failed"));
             when(topicRouter.getKafkaTopic("srm", "/event/Test__e"))
                     .thenReturn(Optional.of("salesforce.srm.test"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createMultiEventBatch("srm", "/event/Test__e", 5);
 
@@ -227,14 +240,14 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should return failure when checkpoint fails")
         void checkpointFailureReturnsFailure() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Test__e"))
                     .thenReturn(Optional.of("salesforce.srm.test"));
             doThrow(new CheckpointException("Database unavailable"))
                     .when(replayStore).checkpoint(any(), any(), any());
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createSingleEventBatch("srm", "/event/Test__e", "Test__e");
 
@@ -256,12 +269,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should include all required headers on published message")
         void allRequiredHeadersPresent() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Enrollment_Event__e"))
                     .thenReturn(Optional.of("salesforce.srm.enrollment"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createSingleEventBatch("srm", "/event/Enrollment_Event__e", "Enrollment_Event__e");
             publisher.publishBatch(batch);
@@ -279,12 +292,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should set correct org header value")
         void orgHeaderValueCorrect() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("acad", "/event/Course_Event__e"))
                     .thenReturn(Optional.of("salesforce.acad.course"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createSingleEventBatch("acad", "/event/Course_Event__e", "Course_Event__e");
             publisher.publishBatch(batch);
@@ -296,12 +309,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should set correct event-type header value")
         void eventTypeHeaderValueCorrect() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Student_Event__e"))
                     .thenReturn(Optional.of("salesforce.srm.student"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createSingleEventBatch("srm", "/event/Student_Event__e", "Student_Event__e");
             publisher.publishBatch(batch);
@@ -313,12 +326,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should set correct replay-id header value")
         void replayIdHeaderValueCorrect() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Test__e"))
                     .thenReturn(Optional.of("salesforce.srm.test"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             byte[] replayIdBytes = "test-replay-id-12345".getBytes(StandardCharsets.UTF_8);
             ReplayId replayId = new ReplayId(replayIdBytes);
@@ -335,12 +348,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should set correct bridge-version header value")
         void bridgeVersionHeaderValueCorrect() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Test__e"))
                     .thenReturn(Optional.of("salesforce.srm.test"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "2.5.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "2.5.0", 30);
 
             EventBatch batch = createSingleEventBatch("srm", "/event/Test__e", "Test__e");
             publisher.publishBatch(batch);
@@ -352,12 +365,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should set received-at header with ISO-8601 timestamp")
         void receivedAtHeaderValueCorrect() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Test__e"))
                     .thenReturn(Optional.of("salesforce.srm.test"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             Instant receivedAt = Instant.parse("2024-03-15T10:30:00Z");
             ReplayId replayId = new ReplayId("replay".getBytes(StandardCharsets.UTF_8));
@@ -383,12 +396,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should use format org:topic:eventId for key")
         void compositeKeyFormatCorrect() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Enrollment_Event__e"))
                     .thenReturn(Optional.of("salesforce.srm.enrollment"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             ReplayId replayId = new ReplayId("replay".getBytes(StandardCharsets.UTF_8));
             ObjectNode payload = objectMapper.createObjectNode();
@@ -406,12 +419,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should use EventUuid when Id is not present")
         void compositeKeyUsesEventUuidWhenNoId() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("acad", "/event/Course_Event__e"))
                     .thenReturn(Optional.of("salesforce.acad.course"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             ReplayId replayId = new ReplayId("replay".getBytes(StandardCharsets.UTF_8));
             ObjectNode payload = objectMapper.createObjectNode();
@@ -430,12 +443,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should generate UUID when neither Id nor EventUuid present")
         void compositeKeyGeneratesUuidWhenNoIdFields() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Test__e"))
                     .thenReturn(Optional.of("salesforce.srm.test"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             ReplayId replayId = new ReplayId("replay".getBytes(StandardCharsets.UTF_8));
             ObjectNode payload = objectMapper.createObjectNode();
@@ -456,12 +469,12 @@ class KafkaEventPublisherTest {
         @Test
         @DisplayName("should publish to correct Kafka topic")
         void publishesToCorrectKafkaTopic() throws CheckpointException {
-            KafkaTemplate<String, byte[]> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createCapturingKafkaTemplate(capturedRecords);
             when(topicRouter.getKafkaTopic("srm", "/event/Enrollment_Event__e"))
                     .thenReturn(Optional.of("salesforce.srm.enrollment"));
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             EventBatch batch = createSingleEventBatch("srm", "/event/Enrollment_Event__e", "Enrollment_Event__e");
             publisher.publishBatch(batch);
@@ -482,10 +495,10 @@ class KafkaEventPublisherTest {
         @DisplayName("should return healthy status when Kafka is available")
         void healthyWhenKafkaAvailable() {
             // Use a custom KafkaTemplate subclass that simulates healthy Kafka
-            KafkaTemplate<String, byte[]> kafkaTemplate = createHealthyKafkaTemplate();
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createHealthyKafkaTemplate();
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             ConnectionStatus status = publisher.getKafkaStatus();
 
@@ -497,10 +510,10 @@ class KafkaEventPublisherTest {
         @DisplayName("should return unhealthy status when Kafka is unavailable")
         void unhealthyWhenKafkaUnavailable() {
             // Use a custom KafkaTemplate subclass that simulates unhealthy Kafka
-            KafkaTemplate<String, byte[]> kafkaTemplate = createUnhealthyKafkaTemplate();
+            KafkaTemplate<String, GenericRecord> kafkaTemplate = createUnhealthyKafkaTemplate();
 
             DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                    kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                    kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
             ConnectionStatus status = publisher.getKafkaStatus();
 
@@ -514,11 +527,11 @@ class KafkaEventPublisherTest {
     // =========================================================================
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private KafkaTemplate<String, byte[]> createCapturingKafkaTemplate(
-            List<ProducerRecord<String, byte[]>> capturedRecords) {
-        return new KafkaTemplate<String, byte[]>(mock(ProducerFactory.class)) {
+    private KafkaTemplate<String, GenericRecord> createCapturingKafkaTemplate(
+            List<ProducerRecord<String, GenericRecord>> capturedRecords) {
+        return new KafkaTemplate<String, GenericRecord>(mock(ProducerFactory.class)) {
             @Override
-            public CompletableFuture<SendResult<String, byte[]>> send(ProducerRecord record) {
+            public CompletableFuture<SendResult<String, GenericRecord>> send(ProducerRecord record) {
                 capturedRecords.add(record);
                 return CompletableFuture.completedFuture(null);
             }
@@ -526,11 +539,11 @@ class KafkaEventPublisherTest {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private KafkaTemplate<String, byte[]> createFailingKafkaTemplate(Exception failureException) {
-        return new KafkaTemplate<String, byte[]>(mock(ProducerFactory.class)) {
+    private KafkaTemplate<String, GenericRecord> createFailingKafkaTemplate(Exception failureException) {
+        return new KafkaTemplate<String, GenericRecord>(mock(ProducerFactory.class)) {
             @Override
-            public CompletableFuture<SendResult<String, byte[]>> send(ProducerRecord record) {
-                CompletableFuture<SendResult<String, byte[]>> future = new CompletableFuture<>();
+            public CompletableFuture<SendResult<String, GenericRecord>> send(ProducerRecord record) {
+                CompletableFuture<SendResult<String, GenericRecord>> future = new CompletableFuture<>();
                 future.completeExceptionally(new ExecutionException(failureException));
                 return future;
             }
@@ -538,16 +551,16 @@ class KafkaEventPublisherTest {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private KafkaTemplate<String, byte[]> createPartiallyFailingKafkaTemplate(
+    private KafkaTemplate<String, GenericRecord> createPartiallyFailingKafkaTemplate(
             int failAtIndex, List<Integer> sendAttempts, Exception failureException) {
-        return new KafkaTemplate<String, byte[]>(mock(ProducerFactory.class)) {
+        return new KafkaTemplate<String, GenericRecord>(mock(ProducerFactory.class)) {
             @Override
-            public CompletableFuture<SendResult<String, byte[]>> send(ProducerRecord record) {
+            public CompletableFuture<SendResult<String, GenericRecord>> send(ProducerRecord record) {
                 int currentIndex = sendAttempts.size();
                 sendAttempts.add(currentIndex);
 
                 if (currentIndex == failAtIndex) {
-                    CompletableFuture<SendResult<String, byte[]>> future = new CompletableFuture<>();
+                    CompletableFuture<SendResult<String, GenericRecord>> future = new CompletableFuture<>();
                     future.completeExceptionally(new ExecutionException(failureException));
                     return future;
                 }
@@ -589,14 +602,14 @@ class KafkaEventPublisherTest {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private KafkaTemplate<String, byte[]> createHealthyKafkaTemplate() {
-        return new KafkaTemplate<String, byte[]>(mock(ProducerFactory.class)) {
+    private KafkaTemplate<String, GenericRecord> createHealthyKafkaTemplate() {
+        return new KafkaTemplate<String, GenericRecord>(mock(ProducerFactory.class)) {
             @Override
-            public ProducerFactory<String, byte[]> getProducerFactory() {
+            public ProducerFactory<String, GenericRecord> getProducerFactory() {
                 // Return a ProducerFactory that creates a producer that doesn't throw
-                return new ProducerFactory<String, byte[]>() {
+                return new ProducerFactory<String, GenericRecord>() {
                     @Override
-                    public org.apache.kafka.clients.producer.Producer<String, byte[]> createProducer() {
+                    public org.apache.kafka.clients.producer.Producer<String, GenericRecord> createProducer() {
                         return new org.apache.kafka.clients.producer.MockProducer<>(true, null, null);
                     }
                 };
@@ -605,14 +618,14 @@ class KafkaEventPublisherTest {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private KafkaTemplate<String, byte[]> createUnhealthyKafkaTemplate() {
-        return new KafkaTemplate<String, byte[]>(mock(ProducerFactory.class)) {
+    private KafkaTemplate<String, GenericRecord> createUnhealthyKafkaTemplate() {
+        return new KafkaTemplate<String, GenericRecord>(mock(ProducerFactory.class)) {
             @Override
-            public ProducerFactory<String, byte[]> getProducerFactory() {
+            public ProducerFactory<String, GenericRecord> getProducerFactory() {
                 // Return a ProducerFactory that throws when creating producer
-                return new ProducerFactory<String, byte[]>() {
+                return new ProducerFactory<String, GenericRecord>() {
                     @Override
-                    public org.apache.kafka.clients.producer.Producer<String, byte[]> createProducer() {
+                    public org.apache.kafka.clients.producer.Producer<String, GenericRecord> createProducer() {
                         throw new RuntimeException("Connection refused");
                     }
                 };

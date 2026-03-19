@@ -1,5 +1,6 @@
 package com.example.bridge.kafka;
 
+import com.example.bridge.avro.AvroRecordConverter;
 import com.example.bridge.model.EventBatch;
 import com.example.bridge.model.PlatformEvent;
 import com.example.bridge.model.PublishResult;
@@ -12,11 +13,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import net.jqwik.api.*;
 import net.jqwik.api.constraints.IntRange;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -38,6 +42,17 @@ import static org.mockito.Mockito.*;
 class NoCheckpointOnPublishFailurePropertyTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AvroRecordConverter avroRecordConverter;
+
+    NoCheckpointOnPublishFailurePropertyTest() {
+        try {
+            Schema schema = new Schema.Parser().parse(
+                    getClass().getResourceAsStream("/avro/SalesforcePlatformEvent.avsc"));
+            this.avroRecordConverter = new AvroRecordConverter(schema, objectMapper);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load Avro schema for tests", e);
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Property: No checkpoint when Kafka send fails with TimeoutException
@@ -51,7 +66,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
             @ForAll("replayIds") byte[] replayIdBytes,
             @ForAll("timestamps") Instant receivedAt) throws CheckpointException {
 
-        KafkaTemplate<String, byte[]> kafkaTemplate = createFailingKafkaTemplate(
+        KafkaTemplate<String, GenericRecord> kafkaTemplate = createFailingKafkaTemplate(
                 new TimeoutException("Kafka broker unavailable"));
         TopicRouter topicRouter = mock(TopicRouter.class);
         ReplayStore replayStore = mock(ReplayStore.class);
@@ -60,7 +75,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
         when(topicRouter.getKafkaTopic(org, salesforceTopic)).thenReturn(Optional.of(kafkaTopic));
 
         DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
         ReplayId replayId = new ReplayId(replayIdBytes);
         JsonNode payload = createPayload(eventType);
@@ -86,7 +101,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
             @ForAll("replayIds") byte[] replayIdBytes,
             @ForAll("timestamps") Instant receivedAt) throws CheckpointException {
 
-        KafkaTemplate<String, byte[]> kafkaTemplate = createFailingKafkaTemplate(
+        KafkaTemplate<String, GenericRecord> kafkaTemplate = createFailingKafkaTemplate(
                 new RuntimeException("Kafka broker rejected message"));
         TopicRouter topicRouter = mock(TopicRouter.class);
         ReplayStore replayStore = mock(ReplayStore.class);
@@ -95,7 +110,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
         when(topicRouter.getKafkaTopic(org, salesforceTopic)).thenReturn(Optional.of(kafkaTopic));
 
         DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
         ReplayId replayId = new ReplayId(replayIdBytes);
         JsonNode payload = createPayload(eventType);
@@ -123,7 +138,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
         int actualFailIndex = Math.min(failAtIndex, eventCount - 1);
         
         List<Integer> sendAttempts = new ArrayList<>();
-        KafkaTemplate<String, byte[]> kafkaTemplate = createPartiallyFailingKafkaTemplate(
+        KafkaTemplate<String, GenericRecord> kafkaTemplate = createPartiallyFailingKafkaTemplate(
                 actualFailIndex, sendAttempts, new RuntimeException("Kafka send failed"));
         TopicRouter topicRouter = mock(TopicRouter.class);
         ReplayStore replayStore = mock(ReplayStore.class);
@@ -132,7 +147,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
         when(topicRouter.getKafkaTopic(org, salesforceTopic)).thenReturn(Optional.of(kafkaTopic));
 
         DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
         List<PlatformEvent> events = new ArrayList<>();
         for (int i = 0; i < eventCount; i++) {
@@ -164,7 +179,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
             @ForAll @IntRange(min = 1, max = 10) int eventCount,
             @ForAll("timestamps") Instant receivedAt) throws CheckpointException {
 
-        KafkaTemplate<String, byte[]> kafkaTemplate = createFailingKafkaTemplate(
+        KafkaTemplate<String, GenericRecord> kafkaTemplate = createFailingKafkaTemplate(
                 new RuntimeException("First event failed"));
         TopicRouter topicRouter = mock(TopicRouter.class);
         ReplayStore replayStore = mock(ReplayStore.class);
@@ -173,7 +188,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
         when(topicRouter.getKafkaTopic(org, salesforceTopic)).thenReturn(Optional.of(kafkaTopic));
 
         DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
         List<PlatformEvent> events = new ArrayList<>();
         for (int i = 0; i < eventCount; i++) {
@@ -208,7 +223,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
             @ForAll("errorMessages") String errorMessage) throws CheckpointException {
 
         RuntimeException originalException = new RuntimeException(errorMessage);
-        KafkaTemplate<String, byte[]> kafkaTemplate = createFailingKafkaTemplate(originalException);
+        KafkaTemplate<String, GenericRecord> kafkaTemplate = createFailingKafkaTemplate(originalException);
         TopicRouter topicRouter = mock(TopicRouter.class);
         ReplayStore replayStore = mock(ReplayStore.class);
 
@@ -216,7 +231,7 @@ class NoCheckpointOnPublishFailurePropertyTest {
         when(topicRouter.getKafkaTopic(org, salesforceTopic)).thenReturn(Optional.of(kafkaTopic));
 
         DefaultKafkaEventPublisher publisher = new DefaultKafkaEventPublisher(
-                kafkaTemplate, topicRouter, replayStore, objectMapper, "1.0.0", 30);
+                kafkaTemplate, topicRouter, replayStore, avroRecordConverter, "1.0.0", 30);
 
         ReplayId replayId = new ReplayId(replayIdBytes);
         JsonNode payload = createPayload(eventType);
@@ -288,11 +303,11 @@ class NoCheckpointOnPublishFailurePropertyTest {
     // -----------------------------------------------------------------------
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private KafkaTemplate<String, byte[]> createFailingKafkaTemplate(Exception failureException) {
-        return new KafkaTemplate<String, byte[]>(mock(org.springframework.kafka.core.ProducerFactory.class)) {
+    private KafkaTemplate<String, GenericRecord> createFailingKafkaTemplate(Exception failureException) {
+        return new KafkaTemplate<String, GenericRecord>(mock(org.springframework.kafka.core.ProducerFactory.class)) {
             @Override
-            public CompletableFuture<SendResult<String, byte[]>> send(ProducerRecord record) {
-                CompletableFuture<SendResult<String, byte[]>> future = new CompletableFuture<>();
+            public CompletableFuture<SendResult<String, GenericRecord>> send(ProducerRecord record) {
+                CompletableFuture<SendResult<String, GenericRecord>> future = new CompletableFuture<>();
                 future.completeExceptionally(new ExecutionException(failureException));
                 return future;
             }
@@ -300,16 +315,16 @@ class NoCheckpointOnPublishFailurePropertyTest {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private KafkaTemplate<String, byte[]> createPartiallyFailingKafkaTemplate(
+    private KafkaTemplate<String, GenericRecord> createPartiallyFailingKafkaTemplate(
             int failAtIndex, List<Integer> sendAttempts, Exception failureException) {
-        return new KafkaTemplate<String, byte[]>(mock(org.springframework.kafka.core.ProducerFactory.class)) {
+        return new KafkaTemplate<String, GenericRecord>(mock(org.springframework.kafka.core.ProducerFactory.class)) {
             @Override
-            public CompletableFuture<SendResult<String, byte[]>> send(ProducerRecord record) {
+            public CompletableFuture<SendResult<String, GenericRecord>> send(ProducerRecord record) {
                 int currentIndex = sendAttempts.size();
                 sendAttempts.add(currentIndex);
                 
                 if (currentIndex == failAtIndex) {
-                    CompletableFuture<SendResult<String, byte[]>> future = new CompletableFuture<>();
+                    CompletableFuture<SendResult<String, GenericRecord>> future = new CompletableFuture<>();
                     future.completeExceptionally(new ExecutionException(failureException));
                     return future;
                 }

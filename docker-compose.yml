@@ -51,12 +51,32 @@ services:
       retries: 5
       start_period: 30s
 
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/subjects || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
   bridge:
     build: .
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+      schema-registry:
         condition: service_healthy
     ports:
       - "8080:8080"
@@ -68,6 +88,8 @@ services:
       # Kafka
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+      # Schema Registry
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
       # Salesforce SRM Org
       SF_SRM_CLIENT_ID: ${SF_SRM_CLIENT_ID:-dev-srm-client-id}
       SF_SRM_CLIENT_SECRET: ${SF_SRM_CLIENT_SECRET:-dev-srm-client-secret}

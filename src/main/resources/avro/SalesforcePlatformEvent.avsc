@@ -1,0 +1,32 @@
+{
+  "type": "record",
+  "name": "SalesforcePlatformEvent",
+  "namespace": "com.example.bridge.avro",
+  "fields": [
+    {
+      "name": "org",
+      "type": "string",
+      "doc": "Salesforce org identifier (e.g., SRM, ACAD)"
+    },
+    {
+      "name": "eventType",
+      "type": "string",
+      "doc": "Salesforce Platform Event type name"
+    },
+    {
+      "name": "replayId",
+      "type": "bytes",
+      "doc": "Opaque Salesforce replay ID for event ordering"
+    },
+    {
+      "name": "timestamp",
+      "type": "string",
+      "doc": "ISO-8601 timestamp of when the bridge received the event"
+    },
+    {
+      "name": "payload",
+      "type": "string",
+      "doc": "JSON-serialized Salesforce event payload"
+    }
+  ]
+}
